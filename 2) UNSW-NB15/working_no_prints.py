@@ -25,8 +25,10 @@ import time
 # ============
 
 # have cherry picked these as they contain some of all, still maybe look for another file with theft in later
-FULL_SOURCE_FILES = ["UNSW_NB15_testing-set.csv",
-                     "UNSW_NB15_training-set.csv"
+FULL_SOURCE_FILES = ["UNSW-NB15_1.csv",
+                     "UNSW-NB15_2.csv",
+                     "UNSW-NB15_3.csv",
+                     "UNSW-NB15_4.csv"
                      ]
 
 BALANCED_FILE = "balanced_NB15_iot.csv"                  # The output file we create/use
@@ -34,6 +36,18 @@ OUTPUT_SEQ_FILE = "novel_attack_sequences2.npy"
 
 # Need all of it
 IMBALANCED_FILES = FULL_SOURCE_FILES
+
+# The raw UNSW-NB15 files do not have headers. We must define them explicitly.
+RAW_COLUMN_NAMES = [
+    "srcip", "sport", "dstip", "dsport", "proto", "state", "dur", "sbytes", 
+    "dbytes", "sttl", "dttl", "sloss", "dloss", "service", "sload", "dload", 
+    "spkts", "dpkts", "swin", "dwin", "stcpb", "dtcpb", "smean", "dmean", 
+    "trans_depth", "res_bdy_len", "sjit", "djit", "stime", "ltime", "sinpkt", 
+    "dinpkt", "tcprtt", "synack", "ackdat", "is_sm_ips_ports", "ct_state_ttl", 
+    "ct_flw_http_mthd", "is_ftp_login", "ct_ftp_cmd", "ct_srv_src", 
+    "ct_srv_dst", "ct_dst_ltm", "ct_src_ltm", "ct_src_dport_ltm", 
+    "ct_dst_sport_ltm", "ct_dst_src_ltm", "attack_cat", "Label"
+]
 
 
 
@@ -43,10 +57,10 @@ IMBALANCED_FILES = FULL_SOURCE_FILES
 
 # Toggles for what code is run
 RECREATE_BALANCED_DATA = False  # Set to False if "balanced_bot_iot.csv" already exists
-RECREATE_SEQUENCES = False      # Set to False if "novel_attack_sequences.npy" already exists
+RECREATE_SEQUENCES = True      # Set to False if "novel_attack_sequences.npy" already exists
 
 # Parameters
-TARGET_SAMPLES_PER_CLASS = 3000
+TARGET_SAMPLES_PER_CLASS = 300
 SEQ_LENGTH = 20 # have a graph printed now to justify this, maybe change to a little higher
 STRIDE = 10 # should be half of seq_length for overlap, if above changes, change this
 TEMPERATURE = 1.2 # see google doc for justification for why its not that large
@@ -54,12 +68,12 @@ TEMPERATURE = 1.2 # see google doc for justification for why its not that large
 
 FEATURES = [
     "dur",                      # Duration
-    "Spkts", "Dpkts",           # Packet counts
+    "spkts", "dpkts",           # Packet counts
     "sbytes", "dbytes",         # Volume
-    "Sload", "Dload",           # Speed (Bits per second)
-    "smeansz", "dmeansz",       # Average packet sizes
-    "Sjit", "Djit",             # Jitter (mSec)
-    "Sintpkt", "Dintpkt"        # Interpacket arrival times
+    "sload", "dload",           # Speed (Bits per second)
+    "smean", "dmean",           # Average packet sizes (Note: 'smean', not 'smeansz')
+    "sjit", "djit",             # Jitter (mSec)
+    "sinpkt", "dinpkt"          # Interpacket arrival (Note: 'sinpkt', not 'Sintpkt')
 ]
 
 
@@ -98,7 +112,7 @@ def create_balanced_dataset(input_path_list, output_path, target_samples):
 
         try:
             # Process chunks within the current file
-            for chunk in pd.read_csv(file_path, chunksize=chunk_size, low_memory=False):
+            for chunk in pd.read_csv(file_path, chunksize=chunk_size, low_memory=False, names=RAW_COLUMN_NAMES, header=None):
                 
                 # 1. Standardise the column name to 'category'
                 if 'attack_cat' in chunk.columns:
@@ -271,11 +285,22 @@ print("\n--- PHASE 2: Learning Grammar (Imbalanced Data) ---")
 IMBALANCED_FILE_MAIN = []
 for file_path in IMBALANCED_FILES:
     print(f"Reading {file_path}...")
-    imbalanced_temp = pd.read_csv(file_path, low_memory=False)
+    imbalanced_temp = pd.read_csv(file_path, low_memory=False, names=RAW_COLUMN_NAMES, header=None)
     IMBALANCED_FILE_MAIN.append(imbalanced_temp)
 
 # Stack them into one giant dataframe
 df_imbal = pd.concat(IMBALANCED_FILE_MAIN, ignore_index=True)
+
+
+# Standardize the column name
+if 'attack_cat' in df_imbal.columns:
+    df_imbal.rename(columns={'attack_cat': 'category'}, inplace=True)
+
+# Clean up UNSW-NB15 whitespace and fill NaNs for normal traffic
+df_imbal['category'] = df_imbal.apply(
+    lambda row: 'Normal' if pd.isna(row['category']) and row['Label'] == 0 else str(row['category']).strip(), 
+    axis=1
+)
 
 # Clean the combined data
 # (Select features, remove Infinity, remove NaNs)
@@ -331,11 +356,12 @@ class SupervisedMarkovChain:
         
         print(f"Identified {n_states} unique composite states.")
 
-        # 3. Count Transitions
+        #3. Count Transitions
         trans_counts = np.ones((n_states, n_states)) * 1e-6 # Laplace smoothing
         
-        grouped = df.sort_values("stime").groupby("saddr")
-        for saddr, group in grouped:
+        grouped = df.sort_values("stime").groupby("srcip")
+        
+        for srcip, group in grouped:  # Changed 'saddr' to 'srcip' here too for clarity
             seq = group['composite_state'].values
             if len(seq) < 2: continue
             
@@ -441,38 +467,11 @@ def get_scaled_transition_matrix(trans_mat, T=1.0):
     
     return scaled / row_sums
 
-# Create a dictionary of 'flgs' -> 'flgs_number' from your real data
-unique_flags = df_imbal[['flgs', 'flgs_number']].drop_duplicates().sort_values('flgs_number')
-
-print("--- Your Dataset's Flag Mapping ---")
-for index, row in unique_flags.iterrows():
-    print(f"{row['flgs_number']} -> '{row['flgs']}'")
-
-
-# Create a dictionary of 'proto' -> 'proto_number' from your real data
-unique_protos = df_imbal[['proto', 'proto_number']].dropna().drop_duplicates().sort_values('proto_number')
-
-print("--- Your Dataset's Protocol Mapping ---")
-for index, row in unique_protos.iterrows():
-    print(f"{row['proto_number']} -> '{row['proto']}'")
-
 
 import pandas as pd
 import numpy as np
 import time
 import warnings
-
-   # 1. SETUP MAPPINGS (To ensure Numbers match Strings)
-    # We scan the original DF to build a truth dictionary (e.g., {'INT': 4, 'FIN': 1})
-    # This guarantees the numbers "match how many there are" in the real data.
-    
-    # Helper to build map safely
-def build_map(df, str_col, num_col):
-    if str_col in df.columns and num_col in df.columns:
-        # Drop duplicates to get unique pairs
-        pairs = df[[str_col, num_col]].dropna().drop_duplicates()
-        return dict(zip(pairs[str_col], pairs[num_col]))
-    return {}
 
 
 def robust_sample(mean, cov):
@@ -489,49 +488,11 @@ def robust_sample(mean, cov):
     
 
 def generate_full_schema_traffic(model, df_original, target_states, samples_per_state=10, 
-                                 seq_len=20, temperature=1.0, output_file="synthetic_bot_iot.csv"):
+                                 seq_len=20, temperature=1.0, output_file="synthetic_unsw_nb15.csv"):
 
-    print(f"\nStarting Generation (with Smart Scaling)...")
+    print(f"\nStarting Generation for UNSW-NB15 (Temperature={temperature})...")
     
-    # 1. WARNING SYSTEM: Checks if 'df_original' actually has the stats columns
-    required_stats = ['TnBPSrcIP', 'TnP_PerProto', 'AR_P_Proto_P_SrcIP']
-    missing = [c for c in required_stats if c not in df_original.columns]
-    if missing:
-        print(f"⚠️ WARNING: df_original is missing columns: {missing}")
-        print("   The generated stats will be 0. Please pass the FULL RAW dataset.")
-
-    # 2. DEFINITIONS: Which columns need scaling?
-    # Scale these based on Bytes
-    byte_stats = ['sbytes', 'dbytes'] 
-    pkt_stats = ['Spkts', 'Dpkts', 'sloss', 'dloss']
-    
-
- 
-    state_map = build_map(df_original, 'state', 'state_number')
-    #flgs_map = build_map(df_original, 'flgs', 'flgs_number')
-    proto_map_rev = build_map(df_original, 'proto', 'proto_number') # 'udp' -> 3
-# 2. Flag Map (Your Hardcoded Fix + Orphans)
-    flgs_map = {
-        'e': 1, 'e s': 2, 'e d': 3, 'e *': 4, 'e g': 5, 
-        'eU': 6, 'e &': 7, 'e   t': 8, 'e  D': 9, 
-        'e dS': 10, 'e    F': 11
-    }
-
-    proto_map_str_to_num = {
-        'tcp': 1, 'arp': 2, 'udp': 3, 'icmp': 4, 'ipv6-icmp': 5
-    }
-
-    # Create Reverse Map: Number -> Name (e.g. 3 -> 'udp')
-    proto_map_num_to_str = {v: k for k, v in proto_map_str_to_num.items()}
-
-    # Standard State Map (BoT-IoT default)
-    state_map = {'INT': 4, 'FIN': 1, 'CON': 2, 'REQ': 3, 'RST': 5, 'URP': 6}
-
-    # Protocol Map (Standardizing common numbers)
-    # This ensures consistency if the template has 'udp' but no number
-    proto_map_rev = {'udp': 17, 'tcp': 6, 'icmp': 1, 'arp': 0, 'ipv6-icmp': 58}
-    
-    # 2. DEFINE EXACT COLUMN ORDER
+    # 1. EXACT UNSW-NB15 COLUMN ORDER (49 Columns)
     final_columns = [
         "srcip", "sport", "dstip", "dsport", "proto", "state", "dur", "sbytes", 
         "dbytes", "sttl", "dttl", "sloss", "dloss", "service", "Sload", "Dload", 
@@ -550,13 +511,12 @@ def generate_full_schema_traffic(model, df_original, target_states, samples_per_
     if temperature != 1.0:
         model.transmat_ = get_scaled_transition_matrix(original_transmat, T=temperature)
 
-    print(f"\nStarting Generation (Corrected Schema)...")
-    
     try:
         for start_node in target_states:
-            if start_node not in model.state_to_idx: continue
+            if start_node not in model.state_to_idx: 
+                print(f"Skipping {start_node} - Not found in model.")
+                continue
 
-            # Filter templates for this specific composite state
             template_pool = df_original[df_original['composite_state'] == start_node]
             if template_pool.empty: continue
             
@@ -567,145 +527,102 @@ def generate_full_schema_traffic(model, df_original, target_states, samples_per_
                     seq_states = model.generate_sequence(start_state=start_node, length=seq_len)
                 except: continue
 
+                # Base time for the generated sequence
+                current_time = int(time.time())
+
                 for t, state in enumerate(seq_states):
                     stats = model.state_feature_stats.get(state)
                     if not stats: continue
 
-                    # 1. DEFINE POOL FIRST (We need it for Protocol Sampling)
-                    # We grab the real data for this state immediately
+                    # Define sampling pool
                     current_pool = df_original[df_original['composite_state'] == state]
-                    
-                    # Fallback Logic: If specific state is empty/rare, use the start node's pool
-                    if current_pool.empty:
-                        sampling_pool = template_pool
-                        # Grab template now
-                        template_row = template_pool.sample(1).iloc[0].to_dict()
-                    else:
-                        sampling_pool = current_pool
-                        # Grab template now
-                        template_row = current_pool.sample(1).iloc[0].to_dict()
+                    sampling_pool = template_pool if current_pool.empty else current_pool
+                    template_row = sampling_pool.sample(1).iloc[0].to_dict()
 
-                    # 2. CATEGORICAL SAMPLING FOR PROTOCOL
-                    gen_proto_num = np.random.choice(sampling_pool['proto_number'].values)
+                    # Categorical Sampling (UNSW just uses strings, no numbers needed!)
+                    gen_proto = np.random.choice(sampling_pool['proto'].dropna().values)
+                    gen_state = np.random.choice(sampling_pool['state'].dropna().values)
+                    gen_service = np.random.choice(sampling_pool['service'].dropna().values)
 
-                    # 3. ROBUST HMM SAMPLING (For Bytes & Speed)
-                    mean_vec = stats['mean']
-                    cov_mx = stats['cov']
-                    
-                    # Proactive Fix for Singular Matrix
-                    cov_reg = cov_mx + np.eye(len(mean_vec)) * 1e-6 # Add tiny noise
-                    cov_reg = (cov_reg + cov_reg.T) / 2             # Force symmetry
-                    
+                    # ROBUST HMM SAMPLING (Samples your 13 FEATURES)
                     feats = robust_sample(stats['mean'], stats['cov'])
-                    feats = np.maximum(feats, 0)
-                    gen_bytes = feats[0]
-                    gen_dload = feats[2]
+                    feats = np.maximum(feats, 0) # No negative values allowed in networking
 
-                    # --- NEW SCALING LOGIC START ---
+                    # Map the generated 1D array back to your FEATURES list
+                    # Order: ["dur", "Spkts", "Dpkts", "sbytes", "dbytes", "Sload", "Dload", 
+                    #         "smeansz", "dmeansz", "Sjit", "Djit", "Sintpkt", "Dintpkt"]
+                    gen_dur = feats[0]
+                    gen_Spkts = max(1, feats[1]) # Min 1 packet
+                    gen_Dpkts = feats[2]
+                    gen_sbytes = max(60, feats[3]) # Min 60 bytes (Ethernet limit)
+                    gen_dbytes = feats[4]
                     
-                    # 1. Calculate Multiplier (Generated vs Original)
-                    original_bytes = template_row.get('bytes', 1.0)
-                    if original_bytes == 0: original_bytes = 1.0 # Avoid divide by zero
-                    
-                    scaling_factor = gen_bytes / original_bytes
-                    
-                    # 2. Safety Clip (Prevent 1000x explosions)
-                    scaling_factor = np.clip(scaling_factor, 0.1, 10.0)
+                    # Update the Template Row with Generated Physics
+                    template_row['dur'] = gen_dur
+                    template_row['Spkts'] = gen_Spkts
+                    template_row['Dpkts'] = gen_Dpkts
+                    template_row['sbytes'] = gen_sbytes
+                    template_row['dbytes'] = gen_dbytes
+                    template_row['Sload'] = feats[5]
+                    template_row['Dload'] = feats[6]
+                    template_row['smeansz'] = feats[7]
+                    template_row['dmeansz'] = feats[8]
+                    template_row['Sjit'] = feats[9]
+                    template_row['Djit'] = feats[10]
+                    template_row['Sintpkt'] = feats[11]
+                    template_row['Dintpkt'] = feats[12]
 
-                    # 3. Apply Multiplier to Byte Stats
-                    for col in byte_stats:
-                        if col in template_row:
-                            template_row[col] = template_row[col] * scaling_factor
+                    # Scale dependent packet loss variables based on generated packet count
+                    original_spkts = max(1, template_row.get('Spkts', 1))
+                    scaling_factor = gen_Spkts / original_spkts
+                    template_row['sloss'] = template_row.get('sloss', 0) * scaling_factor
+                    template_row['dloss'] = template_row.get('dloss', 0) * scaling_factor
 
-                    # 4. Apply Multiplier to Packet Stats
-                    for col in pkt_stats:
-                        if col in template_row:
-                            template_row[col] = template_row[col] * scaling_factor
-                            
-                    # --- NEW SCALING LOGIC END ---
+                    # Overwrite Categorical Fields
+                    template_row['proto'] = gen_proto
+                    template_row['state'] = gen_state
+                    template_row['service'] = gen_service
 
-                    # --- OVERWRITE CORE FIELDS ---
-                    template_row['proto_number'] = gen_proto_num
-                    # ... (rest of code is same)
-                    
-                    # Update protocol string name using your reversed map
-                    proto_name_map = {v: k for k, v in proto_map_rev.items()}
-                    # If the number is new (e.g. 17), update the string to 'udp'
-                    template_row['proto'] = proto_name_map.get(gen_proto_num, template_row['proto'])
+                    # Time Physics Enforcement (UNSW uses Stime and Ltime)
+                    template_row['Stime'] = current_time + (t * 0.5) # packets arrive chronologically
+                    template_row['Ltime'] = template_row['Stime'] + gen_dur # Last time = Start time + duration
 
-                    # 2. Update Stats
-                    template_row['bytes'] = gen_bytes
-                    template_row['sbytes'] = gen_bytes
-                    template_row['dbytes'] = 0
-                    template_row['rate'] = gen_dload / 8.0 if gen_dload > 0 else 0
-                    
-                    # 3. Flags & State Consistency
-                    curr_flgs = template_row.get('flgs', 'e')
-                    curr_state = template_row.get('state', 'INT')
-                    
-                    template_row['flgs_number'] = flgs_map.get(curr_flgs, 1)
-                    template_row['state_number'] = state_map.get(curr_state, 4) 
-
-                    # 4. Identity & Time
-                    template_row['pkSeqID'] = int(time.time() * 1000000) + t
-                    template_row['stime'] = template_row['stime'] + (t * 0.1)
-                    template_row['seq'] = i
-                    
                     all_rows.append(template_row)
     finally:
+        # Reset the transition matrix temperature
         if temperature != 1.0:
             model.transmat_ = original_transmat
 
     if all_rows:
         df_gen = pd.DataFrame(all_rows)
         
-        # Fill missing columns with 0 or empty string to prevent errors
+        # Ensure column order and fill missing with 0
         for col in final_columns:
             if col not in df_gen.columns:
                 df_gen[col] = 0
-        
-        # Enforce the EXACT order requested
-        df_gen = df_gen[final_columns]
-
-        # ... inside generate_full_schema_traffic_final ...
-        
-        # --- FIX: FORCE INTEGERS ---
-        # These columns can NEVER be decimals in real life
-        int_cols = ['pkts', 'bytes', 'spkts', 'dpkts', 
-                    'sbytes', 'dbytes', 'flgs_number', 
-                    'state_number', 'proto_number', 'seq']
-        
-        # Ensure column order
-        for col in final_columns:
-            if col not in df_gen.columns: df_gen[col] = 0
         df_gen = df_gen[final_columns]
         
-        df_gen.to_csv(output_file, index=False)
+        # --- UNSW-NB15 SPECIFIC INTEGER ENFORCEMENT ---
+        int_cols = [
+            "sport", "dsport", "sbytes", "dbytes", "sttl", "dttl", "sloss", "dloss", 
+            "Spkts", "Dpkts", "swin", "dwin", "stcpb", "dtcpb", "smeansz", "dmeansz", 
+            "trans_depth", "res_bdy_len", "is_sm_ips_ports", "ct_state_ttl", 
+            "ct_flw_http_mthd", "is_ftp_login", "ct_ftp_cmd", "ct_srv_src", 
+            "ct_srv_dst", "ct_dst_ltm", "ct_src_ltm", "ct_src_dport_ltm", 
+            "ct_dst_sport_ltm", "ct_dst_src_ltm", "Label"
+        ]
         
         for col in int_cols:
             if col in df_gen.columns:
-                # Round to nearest whole number, then convert to Int
+                df_gen[col] = pd.to_numeric(df_gen[col], errors='coerce')
+                # 2. Fill any NaNs (the former dashes/spaces) with 0
+                df_gen[col] = df_gen[col].fillna(0)
+                # 3. Now it is mathematically safe to round and convert to integer
                 df_gen[col] = df_gen[col].round().astype(int)
-                
-        # --- FIX: FORCE ATTACK LABEL TO INT ---
-        if 'attack' in df_gen.columns:
-             df_gen['attack'] = df_gen['attack'].round().astype(int)
 
-
-        # 2. Force Valid Byte Sizes (The "Physics" Fix)
-        # Ensures every packet has at least 60 bytes (Ethernet minimum)
-        min_bytes = df_gen['pkts'] * 60
-        df_gen['bytes'] = np.maximum(df_gen['bytes'], min_bytes)
-        df_gen['sbytes'] = df_gen['bytes'] # Sync source bytes
-
-        # Ensure column order
-        for col in final_columns:
-            if col not in df_gen.columns: df_gen[col] = 0
-        df_gen = df_gen[final_columns]
-        
         df_gen.to_csv(output_file, index=False)
         print(f"\nSUCCESS: Generated {len(df_gen)} rows.")
-        print(f"Columns reordered to match BoT-IoT original format.")
+        print(f"Columns reordered to match UNSW-NB15 format.")
         print(f"Saved to: {output_file}")
         return df_gen
     else:
@@ -750,7 +667,9 @@ print_available_composites(hmm_supervised)
 # 3. DEFINE your wish list
 # You can copy-paste these from the print output above
 my_target_states = [
-    '12_Worms'
+    '4_Exploits',    
+    '2_Reconnaissance', 
+    '0_Normal'
 ]
 
 
@@ -810,4 +729,4 @@ def inspect_transition_probabilities(model, state_name):
             print(f"  -> {next_state}: {prob:.2%} chance")
 
 
-inspect_transition_probabilities(hmm_supervised, '')
+inspect_transition_probabilities(hmm_supervised, '4_Exploits')
