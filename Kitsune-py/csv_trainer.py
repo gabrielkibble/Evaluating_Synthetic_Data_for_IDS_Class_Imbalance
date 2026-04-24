@@ -5,19 +5,42 @@ from sklearn.metrics import roc_auc_score, precision_recall_curve, classificatio
 from KitNET.KitNET import KitNET  # Adjust import path as needed
 
 ################ USER CONFIG #################
-CSV_PATH = "balanced_bot_iot.csv" 
-# The column containing 0 (Normal) and 1 (Attack)
-LABEL_COL_NAME = "attack"
-# The column containing text names like 'DoS', 'Reconnaissance' (Optional, for detailed breakdown)
-ATTACK_TYPE_COL = "category"
+CSV_PATH = "/mnt/vurm/homes/homes/gk634/Dissertation/DBN/dbn-based-nids/data/raw/Monday-WorkingHours.pcap_ISCX.csv"
+LABEL_COL_NAME = "label_binary"  # We'll create this
+ATTACK_TYPE_COL = "label_original"  # We'll create this
 # Limit rows for testing? (Set None for full dataset)
-LIMIT_ROWS = 50000 
+LIMIT_ROWS = 20000 
 ##############################################
 
 def main():
     # 1. Load Data
-    print(f"Loading {CSV_PATH}...")
-    df = pd.read_csv(CSV_PATH, nrows=LIMIT_ROWS)
+    import glob
+
+    print("Loading CICIDS2017 data...")
+    files = glob.glob("/mnt/vurm/homes/homes/gk634/Dissertation/DBN/dbn-based-nids/data/raw/*.csv")
+    files = [f for f in files if 'synthetic' not in f.lower()]
+
+    dfs = []
+    for f in sorted(files):
+        print(f"  Reading {f}...")
+        temp = pd.read_csv(f, encoding='cp1252', low_memory=False)
+        temp.columns = [c.strip() for c in temp.columns]
+        
+        # Sample: keep all attacks + sample benign
+        benign = temp[temp['Label'].str.strip() == 'BENIGN'].sample(n=min(2000, len(temp[temp['Label'].str.strip() == 'BENIGN'])), random_state=42)
+        attacks = temp[temp['Label'].str.strip() != 'BENIGN'].sample(n=min(2000, len(temp[temp['Label'].str.strip() != 'BENIGN'])), random_state=42)
+        dfs.append(pd.concat([benign, attacks], ignore_index=True))
+        print(f"    Benign: {len(benign)}, Attacks: {len(attacks)}")
+
+    df = pd.concat(dfs, ignore_index=True)
+
+    # Create binary label and keep original
+    df['label_original'] = df['Label']
+    df['label_binary'] = df['Label'].apply(lambda x: 0 if str(x).strip() == 'BENIGN' else 1)
+    df = df.drop(columns=['Flow ID', 'Source IP', 'Destination IP', 'Timestamp', 'Label'], errors='ignore')
+
+    LABEL_COL_NAME = "label_binary"
+    ATTACK_TYPE_COL = "label_original"
     
     # --- THE FIX: SORT BY LABEL TO ENSURE CLEAN TRAINING ---
     # We assume '0' is Benign and '1' is Attack. 
@@ -86,18 +109,41 @@ def main():
     # Auto-drop any other non-numeric columns (IPs, strings)
     df_features = df_features.select_dtypes(include=[np.number])
     
-    # Normalize Features (Crucial for Kitsune on different datasets)
-    df_features = (df_features - df_features.min()) / (df_features.max() - df_features.min() + 1e-6)
-    df_features = df_features.fillna(0) # Handle divide by zero
-    
+    # Normalize using ONLY benign statistics (first 16000 rows after sort)
+    # This prevents attack outliers from skewing the normalization
+    benign_data = df_features.iloc[:num_benign]
+    feat_min = benign_data.min()
+    feat_max = benign_data.max()
+    df_features = (df_features - feat_min) / (feat_max - feat_min + 1e-6)
+    df_features = df_features.clip(-10, 10)  # Clip extreme outliers
+    df_features = df_features.fillna(0)
+    df_features = df_features.replace([np.inf, -np.inf], 0)
+
+    # DEBUG: Find problematic columns
+    print("\nDEBUG: Checking for extreme values after normalization...")
+    for col in df_features.columns:
+        col_max = df_features[col].max()
+        col_min = df_features[col].min()
+        benign_max = df_features[col].iloc[:num_benign].max()
+        if col_max > 5 or col_min < -5 or benign_max > 5:
+            print(f"  SUSPECT: {col} | benign_max={benign_max:.4f} | full_max={col_max:.4f} | full_min={col_min:.4f}")
+
+    # Also check for NaN in the numpy array
     X = df_features.to_numpy()
+    print(f"\nDEBUG: NaN count in X: {np.isnan(X).sum()}")
+    print(f"DEBUG: Inf count in X: {np.isinf(X).sum()}")
+    print(f"DEBUG: Max value in X: {np.max(X):.4f}")
+    print(f"DEBUG: Max value in benign rows: {np.max(X[:num_benign]):.4f}")
     print(f"Features ready: {X.shape}")
 
     # 4. Initialize KitNET
     max_ae = 10 
     # Grace period: Train on first 10% (Assuming usually benign start) or fixed number
-    grace_period = int(min(len(X) * 0.1, 5000))
-    
+    grace_period = 10000
+
+    print(f"First {grace_period} rows label distribution:")
+    print(pd.Series(y_true[:grace_period]).value_counts())
+
     K = KitNET(X.shape[1], max_ae, int(grace_period*0.1), grace_period)
 
     # 5. Run Detection
@@ -112,6 +158,29 @@ def main():
             print(f"Processing row {i}...", end='\r')
             
     print(f"\nFinished in {time.time() - start_time:.2f}s")
+
+    # Cap exploding scores at a reasonable maximum
+    score_cap = 1.0  # No legitimate RMSE should exceed 1.0 with normalized inputs
+    n_capped = sum(1 for s in scores if s > score_cap)
+    scores = [min(s, score_cap) for s in scores]
+    print(f"Capped {n_capped} exploding scores at {score_cap}")
+
+    # Add here:
+    benign_scores = [scores[i] for i in range(grace_period, len(scores)) if y_true[i] == 0]
+    attack_scores = [scores[i] for i in range(grace_period, len(scores)) if y_true[i] == 1]
+
+    print(f"Benign RMSE: mean={np.mean(benign_scores):.6f}, std={np.std(benign_scores):.6f}")
+    print(f"Benign RMSE: median={np.median(benign_scores):.6f}")
+    print(f"Attack RMSE: mean={np.mean(attack_scores):.6f}, std={np.std(attack_scores):.6f}")
+
+    # Find the outliers
+    benign_sorted = sorted(benign_scores, reverse=True)
+    print(f"\nTop 10 benign RMSE scores: {benign_sorted[:10]}")
+    print(f"Bottom 10 benign RMSE scores: {benign_sorted[-10:]}")
+    print(f"Benign scores > 1.0: {sum(1 for s in benign_scores if s > 1.0)}")
+    print(f"Benign scores > 100: {sum(1 for s in benign_scores if s > 100)}")
+
+    # 6. CALCULATE METRICS
     
     # Filter out the grace period (training phase) from evaluation
     # We can't evaluate accuracy while it was still learning!

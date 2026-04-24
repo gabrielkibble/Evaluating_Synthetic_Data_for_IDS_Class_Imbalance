@@ -52,6 +52,11 @@ def trainNetwork():
     model = IDS.train(train_data, encoding, params)
     model.save("new_encoding.h5")
 
+    # --- LOAD BRET'S PRE-TRAINED MODEL INSTEAD ---
+    #print("Loading Bret's trained.h5 model...")
+    # The "../" tells it to look one folder up from the Python folder
+    #model = keras.models.load_model("../trained.h5")
+
 #-------------------------------------------------------------------------------------
 def generateDataSet():
     path = "Data/CIC2017/GenLabels/" 

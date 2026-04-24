@@ -29,12 +29,17 @@ MODEL_DIR = os.path.join(os.path.abspath("."), "checkpoints")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Ensure that all operations are deterministic for reproducibility, even on GPU (if used)
-utils.set_seed(42)
+# Seed is set from config inside main() 42 was used before
 torch.backends.cudnn.determinstic = True
 torch.backends.cudnn.benchmark = False
 
 def main(config):
     """Centralised"""
+    # Set seed from config (default 42 for backward compatibility)
+    seed = config.get("seed", 42)
+    utils.set_seed(seed)
+    
+    # 1. Configure logging
 
     # 1. Configure logging
     utils.mkdir(LOG_DIR)
@@ -93,7 +98,10 @@ def main(config):
     valid_output_true = train_history["valid"]["output_true"]
     valid_output_pred = train_history["valid"]["output_pred"]
 
-    labels = ["Benign", "Botnet ARES", "Brute Force", "DoS/DDoS", "PortScan", "Web Attack"]
+    if "unsw" in config["name"]:
+        labels = ["Analysis", "Backdoors", "DoS", "Exploits", "Fuzzers", "Generic", "Normal", "Reconnaissance", "Shellcode"]
+    else:
+        labels = ["Benign", "Botnet ARES", "Brute Force", "DoS/DDoS", "PortScan", "Web Attack"]
 
     ## Training Set results
     logging.info('Training Set -- Classification Report')

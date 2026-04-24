@@ -1,0 +1,15 @@
+Building hash set of real data...
+  data/raw/Monday-WorkingHours.pcap_ISCX.csv: 188968 rows hashed
+  data/raw/Tuesday-WorkingHours.pcap_ISCX.csv: 246175 rows hashed
+  data/raw/Wednesday-workingHours.pcap_ISCX.csv: 231966 rows hashed
+  data/raw/Thursday-WorkingHours-Morning-WebAttacks.pcap_ISCX.csv: 458968 rows hashed
+  data/raw/Thursday-WorkingHours-Afternoon-Infilteration.pcap_ISCX.csv: 272653 rows hashed
+  data/raw/Friday-WorkingHours-Morning.pcap_ISCX.csv: 191033 rows hashed
+  data/raw/Friday-WorkingHours-Afternoon-PortScan.pcap_ISCX.csv: 286467 rows hashed
+  data/raw/Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv: 225745 rows hashed
+
+Total real hashes: 1813187
+Synthetic rows: 269740
+
+Exact matches found: 0
+Verification: PASS - no duplicates
