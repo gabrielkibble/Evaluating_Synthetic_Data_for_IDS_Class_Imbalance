@@ -1,0 +1,11 @@
+Building hash set of real data...
+  data/raw_unsw/UNSW-NB15_1.csv: 700001 rows hashed
+  data/raw_unsw/UNSW-NB15_2.csv: 700001 rows hashed
+  data/raw_unsw/UNSW-NB15_3.csv: 700001 rows hashed
+  data/raw_unsw/UNSW-NB15_4.csv: 440044 rows hashed
+
+Total real hashes: 2059415
+Synthetic rows: 59680
+
+Exact matches found: 0
+Verification: PASS - no duplicates

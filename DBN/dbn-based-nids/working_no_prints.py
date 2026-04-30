@@ -810,3 +810,18 @@ for cat in GENERATION_TARGETS.keys():
     cat_states = get_composite_states_for_category(hmm_supervised, cat)
     if cat_states:
         inspect_transition_probabilities(hmm_supervised, cat_states[0])
+
+# 7. Temperature sweep for sensitivity analysis
+for T in [1.4, 1.6, 1.8, 2.0, 2.5, 3.0]:
+    print(f"\n{'#'*60}")
+    print(f"GENERATING AT T={T}")  
+    print(f"{'#'*60}")
+    
+    generate_minority_traffic(
+        model=hmm_supervised,
+        df_original=df_imbal,
+        generation_targets=GENERATION_TARGETS,
+        seq_len=SEQ_LENGTH,
+        temperature=T,
+        output_file=f"synthetic_cicids_T{T}.csv"
+    )
