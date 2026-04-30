@@ -1,5 +1,7 @@
 # Synthetic Traffic Augmentation for Minority Class Detection in Network IDS
 
+**Repository:** [https://github.com/gabrielkibble/Dissertation](https://github.com/gabrielkibble/Dissertation)
+
 This repository contains the implementation and evaluation code for a supervised Markov chain pipeline that generates synthetic network traffic to improve minority class detection in intrusion detection systems.
 
 ## Repository Structure
@@ -220,7 +222,3 @@ CUDA_VISIBLE_DEVICES=1 python main.py --config ./configs/deepBeliefNetwork.json
 | UNSW-NB15 | DBN | 0.25 | 0.11 | **0.32** |
 
 Statistical significance confirmed via paired t-tests (MLP: p=0.0016, DBN: p=0.021).
-
-## License
-
-See LICENSE file.
